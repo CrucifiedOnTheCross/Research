@@ -213,6 +213,27 @@ channels-last, `torch.compile`, 12 DataLoader workers и gradient accumulation.
 снизить скорость и не гарантирует побитовую идентичность между разными версиями GPU,
 CUDA и PyTorch.
 
+### Мониторинг GPU
+
+Фоновая задача `ISIC GPU Monitor` каждые 5 секунд записывает utilization, VRAM,
+мощность, температуру, частоты и параметры PCIe в
+`gpu-telemetry/gpu-snapshots.csv`. Файл автоматически попадает в локальную папку
+`server-results/gpu-telemetry` вместе с результатами экспериментов.
+
+Запуск или переустановка монитора:
+
+```powershell
+ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
+  -File C:\Users\lab-bio\Research\scripts\start-gpu-monitor.ps1
+```
+
+Сводка за последние 10 минут:
+
+```powershell
+ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
+  -File C:\Users\lab-bio\Research\scripts\summarize-gpu-monitor.ps1
+```
+
 ## Быстрые проверки
 
 Внутри собранного образа:

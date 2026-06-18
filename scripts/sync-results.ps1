@@ -72,4 +72,20 @@ foreach ($entry in $manifest) {
     $downloaded++
 }
 
+# Keep a rolling local copy of the lightweight GPU telemetry. The remote file may
+# grow during transfer; replacing it atomically still gives a consistent snapshot.
+$telemetryDirectory = Join-Path $localRoot "gpu-telemetry"
+$telemetryDestination = Join-Path $telemetryDirectory "gpu-snapshots.csv"
+$telemetryPartial = "$telemetryDestination.part"
+New-Item -ItemType Directory -Force -Path $telemetryDirectory | Out-Null
+Remove-Item -LiteralPath $telemetryPartial -Force -ErrorAction SilentlyContinue
+& scp -q -o BatchMode=yes -o ConnectTimeout=15 `
+    "$Server`:$RemoteProject/gpu-telemetry/gpu-snapshots.csv" $telemetryPartial 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Move-Item -LiteralPath $telemetryPartial -Destination $telemetryDestination -Force
+} else {
+    Remove-Item -LiteralPath $telemetryPartial -Force -ErrorAction SilentlyContinue
+    Write-Verbose "GPU telemetry is not available yet."
+}
+
 Write-Host "Result sync complete: downloaded=$downloaded unchanged=$skipped destination=$localRoot"

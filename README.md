@@ -163,6 +163,27 @@ Unregister-ScheduledTask -TaskName "ISIC Research Result Sync"
 Скрипт использует SSH-ключ и поэтому требует, чтобы команда
 `ssh -o BatchMode=yes lab-bio@10.200.1.180 exit` выполнялась без запроса пароля.
 
+## Полностью автоматическая подготовка сервера
+
+На Windows-сервере следующий скрипт в фоне скачивает официальный ISIC 2019 с
+продолжением прерванной загрузки, проверяет точные размеры файлов и количество 25 331
+изображений, распаковывает данные, собирает образ, запускает обучение и TensorBoard:
+
+```powershell
+ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
+  -File C:\Users\lab-bio\Research\scripts\start-server-pipeline.ps1
+```
+
+Состояние хранится в `pipeline-status.json`, подробный вывод — в
+`pipeline-stdout.log` и `pipeline-stderr.log`. TensorBoard слушает только localhost
+сервера; для безопасного просмотра используйте SSH-туннель:
+
+```powershell
+ssh -N -L 6006:127.0.0.1:6006 lab-bio@10.200.1.180
+```
+
+После этого интерфейс доступен на `http://localhost:6006`.
+
 ## Настройка производительности
 
 Исходная конфигурация рассчитана на RTX 5080 16 GB и i7-14700KF: BF16, TF32,

@@ -1,5 +1,6 @@
 data/
 runs/
+server-results/
 checkpoints/
 .venv/
 __pycache__/

@@ -111,6 +111,37 @@ ssh -N -L 6006:localhost:6006 user@server
 
 Откройте `http://localhost:6006`. Порт TensorBoard не требуется публиковать наружу.
 
+## Автоматическая выгрузка результатов с сервера
+
+Для сервера `lab-bio@10.200.1.180` предусмотрена фоновая синхронизация на локальный
+Windows-компьютер. Логи и метрики копируются по мере изменения, а `best.pt` — когда
+эксперимент получает состояние `completed`. Временные загрузки имеют суффикс `.part`,
+поэтому недокачанный файл не будет принят за готовый.
+
+Один запуск синхронизации:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\sync-results.ps1
+```
+
+Установка локальной задачи Windows, запускающей синхронизацию каждые 10 минут:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-result-sync.ps1
+```
+
+Результаты появятся в `server-results/`. По умолчанию большой `last.pt` не копируется;
+если он нужен для продолжения обучения, установите задачу с флагом
+`-IncludeLastCheckpoint`. Посмотреть или удалить задачу:
+
+```powershell
+Get-ScheduledTask -TaskName "ISIC Research Result Sync"
+Unregister-ScheduledTask -TaskName "ISIC Research Result Sync"
+```
+
+Скрипт использует SSH-ключ и поэтому требует, чтобы команда
+`ssh -o BatchMode=yes lab-bio@10.200.1.180 exit` выполнялась без запроса пароля.
+
 ## Настройка производительности
 
 Исходная конфигурация рассчитана на RTX 5080 16 GB и i7-14700KF: BF16, TF32,

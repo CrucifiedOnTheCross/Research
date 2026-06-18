@@ -158,6 +158,7 @@ def main() -> None:
     run_dir = make_run_dir(exp_cfg["output_dir"], exp_cfg["name"])
     write_json(run_dir / "config.json", config)
     write_json(run_dir / "environment.json", environment_snapshot())
+    write_json(run_dir / "status.json", {"state": "initializing"})
     writer = SummaryWriter(run_dir / "tensorboard")
 
     data = create_dataloaders(data_cfg, int(exp_cfg["seed"]), int(train_cfg["batch_size"]))
@@ -215,6 +216,7 @@ def main() -> None:
         model = torch.compile(model, mode="max-autotune")
     started = time.time()
     try:
+        write_json(run_dir / "status.json", {"state": "running", "started_unix": started})
         for epoch in range(start_epoch, int(train_cfg["epochs"]) + 1):
             train_metrics = train_epoch(
                 model, data.train_loader, optimizer, scheduler, scaler,
@@ -224,6 +226,10 @@ def main() -> None:
             record = {"epoch": epoch, "elapsed_seconds": time.time() - started,
                       "train": train_metrics, "validation": val_metrics}
             append_jsonl(run_dir / "metrics.jsonl", record)
+            write_json(run_dir / "status.json", {
+                "state": "running", "started_unix": started, "last_epoch": epoch,
+                "best_mcc": max(best_mcc, float(val_metrics["mcc"])),
+            })
             for name, value in train_metrics.items():
                 writer.add_scalar(f"train/{name}", value, epoch)
             for name in ("accuracy", "balanced_accuracy", "macro_f1", "weighted_f1", "mcc"):
@@ -248,6 +254,16 @@ def main() -> None:
                 patience += 1
             if patience >= int(train_cfg["early_stopping_patience"]):
                 break
+        write_json(run_dir / "status.json", {
+            "state": "completed", "started_unix": started,
+            "finished_unix": time.time(), "best_mcc": best_mcc,
+        })
+    except BaseException as error:
+        write_json(run_dir / "status.json", {
+            "state": "failed", "started_unix": started,
+            "finished_unix": time.time(), "error": repr(error),
+        })
+        raise
     finally:
         writer.close()
 

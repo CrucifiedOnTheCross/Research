@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from .config import load_config
+from .config import apply_overrides, load_config
 from .data import CLASS_NAMES, create_dataloaders, metadata_dimension
 from .losses import SupConLoss
 from .metrics import classification_metrics
@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train multimodal ConvNeXtV2 on ISIC 2019")
     parser.add_argument("--config", default="configs/train.yaml")
     parser.add_argument("--resume", default=None, help="Checkpoint path; overrides config")
+    parser.add_argument("--set", action="append", default=[], dest="overrides")
     return parser.parse_args()
 
 
@@ -55,12 +56,17 @@ def loss_function(
     supcon_loss: nn.Module,
     weights: dict[str, float],
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    zero = outputs["diagnosis"].sum() * 0.0
     losses = {
         "diagnosis": diagnosis_loss(outputs["diagnosis"], batch["target"]),
-        "image_diagnosis": diagnosis_loss(outputs["image_diagnosis"], batch["target"]),
-        "melanoma": binary_loss(outputs["melanoma"], batch["melanoma"]),
-        "malignant": binary_loss(outputs["malignant"], batch["malignant"]),
-        "supcon": supcon_loss(outputs["projections"], batch["target"]),
+        "image_diagnosis": diagnosis_loss(outputs["image_diagnosis"], batch["target"])
+        if float(weights["image_diagnosis"]) > 0 else zero,
+        "melanoma": binary_loss(outputs["melanoma"], batch["melanoma"])
+        if float(weights["melanoma"]) > 0 else zero,
+        "malignant": binary_loss(outputs["malignant"], batch["malignant"])
+        if float(weights["malignant"]) > 0 else zero,
+        "supcon": supcon_loss(outputs["projections"], batch["target"])
+        if float(weights["supcon"]) > 0 else zero,
     }
     total = sum(losses[name] * float(weights[name]) for name in losses)
     return total, {name: float(value.detach()) for name, value in losses.items()}
@@ -93,14 +99,21 @@ def train_epoch(
             for key, value in batch.items()
         }
         images = batch["image1"]
-        second_images = batch["image2"]
+        second_images = batch["image2"] if cfg.get("two_views", True) else None
         if cfg.get("channels_last", True):
             images = images.contiguous(memory_format=torch.channels_last)
-            second_images = second_images.contiguous(memory_format=torch.channels_last)
+            if second_images is not None:
+                second_images = second_images.contiguous(memory_format=torch.channels_last)
         if cfg.get("compile", True):
             torch.compiler.cudagraph_mark_step_begin()
         with autocast_context(cfg["amp_dtype"]):
             outputs = model(images, batch["metadata"], second_images)
+            if second_images is not None:
+                pass
+            elif float(cfg["loss_weights"]["supcon"]) > 0:
+                raise ValueError("SupCon requires training.two_views=true")
+            else:
+                outputs["projections"] = outputs["projection"].unsqueeze(1)
             loss, parts = loss_function(
                 outputs, batch, diagnosis_loss, binary_loss, supcon_loss,
                 cfg["loss_weights"],
@@ -152,7 +165,7 @@ def validate(model: nn.Module, loader, cfg: dict, device: torch.device) -> dict[
 
 def main() -> None:
     args = parse_args()
-    config = load_config(args.config).raw
+    config = apply_overrides(load_config(args.config), args.overrides).raw
     exp_cfg, data_cfg, model_cfg, train_cfg = (
         config["experiment"], config["data"], config["model"], config["training"]
     )
@@ -165,7 +178,10 @@ def main() -> None:
     write_json(run_dir / "status.json", {"state": "initializing"})
     writer = SummaryWriter(run_dir / "tensorboard")
 
-    data = create_dataloaders(data_cfg, int(exp_cfg["seed"]), int(train_cfg["batch_size"]))
+    data = create_dataloaders(
+        data_cfg, int(exp_cfg["seed"]), int(train_cfg["batch_size"]),
+        bool(train_cfg.get("two_views", True)),
+    )
     write_json(run_dir / "data_summary.json", {
         "train_size": data.train_size, "val_size": data.val_size,
         "classes": CLASS_NAMES, "class_weights": data.class_weights.tolist(),
@@ -176,6 +192,8 @@ def main() -> None:
         metadata_embedding_dim=int(model_cfg["metadata_embedding_dim"]),
         projection_dim=int(model_cfg["projection_dim"]), dropout=float(model_cfg["dropout"]),
         pretrained=bool(model_cfg["pretrained"]),
+        use_image=bool(model_cfg.get("use_image", True)),
+        use_metadata=bool(model_cfg.get("use_metadata", True)),
     ).to(device)
     if train_cfg.get("channels_last", True):
         model = model.to(memory_format=torch.channels_last)
@@ -199,7 +217,10 @@ def main() -> None:
 
     scheduler = LambdaLR(optimizer, schedule)
     scaler = torch.amp.GradScaler("cuda", enabled=train_cfg["amp_dtype"] == "float16")
-    diagnosis_loss = nn.CrossEntropyLoss(label_smoothing=float(train_cfg["label_smoothing"]))
+    diagnosis_loss = nn.CrossEntropyLoss(
+        weight=data.class_weights.to(device) if train_cfg.get("use_class_weights", False) else None,
+        label_smoothing=float(train_cfg["label_smoothing"]),
+    )
     binary_loss = nn.BCEWithLogitsLoss()
     supcon_loss = SupConLoss(float(train_cfg["supcon_temperature"]))
     start_epoch, best_mcc, patience = 1, -float("inf"), 0
@@ -254,7 +275,10 @@ def main() -> None:
             if float(val_metrics["mcc"]) > best_mcc:
                 best_mcc = float(val_metrics["mcc"])
                 patience = 0
-                torch.save(checkpoint, run_dir / "best.pt")
+                torch.save({
+                    "epoch": epoch, "model": raw_model.state_dict(),
+                    "best_mcc": best_mcc, "config": config,
+                }, run_dir / "best.pt")
                 write_json(run_dir / "best_metrics.json", val_metrics)
             else:
                 patience += 1

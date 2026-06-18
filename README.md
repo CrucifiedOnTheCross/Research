@@ -184,6 +184,22 @@ ssh -N -L 6006:127.0.0.1:6006 lab-bio@10.200.1.180
 
 После этого интерфейс доступен на `http://localhost:6006`.
 
+## Очередь исследовательских экспериментов
+
+Предзарегистрированный план находится в `experiments/PROTOCOL.md`, а машинная очередь
+— в `experiments/queue.json`. Она ждёт завершения активной full-модели, затем запускает
+41 эксперимент последовательно: baselines, controlled additions, leave-one-out
+ablation, sensitivity, seeds и пять grouped folds. Состояние хранится в
+`experiment-queue-state.json`, логи запуска — в `queue-logs/`.
+
+```powershell
+ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
+  -File C:\Users\lab-bio\Research\scripts\start-experiment-queue.ps1
+```
+
+После успешного запуска сохраняется компактный `best.pt`; большой resumable
+`last.pt` удаляется. При сбое `last.pt` остаётся для диагностики и продолжения.
+
 ## Настройка производительности
 
 Исходная конфигурация рассчитана на RTX 5080 16 GB и i7-14700KF: BF16, TF32,

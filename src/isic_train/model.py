@@ -15,8 +15,14 @@ class ISICMultimodalModel(nn.Module):
         projection_dim: int,
         dropout: float,
         pretrained: bool,
+        use_image: bool = True,
+        use_metadata: bool = True,
     ) -> None:
         super().__init__()
+        if not use_image and not use_metadata:
+            raise ValueError("At least one of use_image/use_metadata must be enabled")
+        self.use_image = use_image
+        self.use_metadata = use_metadata
         self.backbone = timm.create_model(
             backbone_name, pretrained=pretrained, num_classes=0, global_pool="avg"
         )
@@ -34,7 +40,7 @@ class ISICMultimodalModel(nn.Module):
             nn.Linear(image_dim, image_dim), nn.GELU(), nn.Linear(image_dim, projection_dim)
         )
         self.image_classifier = nn.Linear(image_dim, 8)
-        fused_dim = image_dim + metadata_embedding_dim
+        fused_dim = (image_dim if use_image else 0) + (metadata_embedding_dim if use_metadata else 0)
         self.fusion = nn.Sequential(
             nn.LayerNorm(fused_dim), nn.Dropout(dropout), nn.Linear(fused_dim, 512), nn.GELU()
         )
@@ -50,8 +56,12 @@ class ISICMultimodalModel(nn.Module):
     def classify(
         self, image_embedding: torch.Tensor, metadata: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        metadata_embedding = self.metadata_encoder(metadata)
-        fused = self.fusion(torch.cat((image_embedding, metadata_embedding), dim=1))
+        features = []
+        if self.use_image:
+            features.append(image_embedding)
+        if self.use_metadata:
+            features.append(self.metadata_encoder(metadata))
+        fused = self.fusion(torch.cat(features, dim=1) if len(features) > 1 else features[0])
         return {
             "diagnosis": self.diagnosis_head(fused),
             "melanoma": self.melanoma_head(fused).squeeze(1),
@@ -64,6 +74,16 @@ class ISICMultimodalModel(nn.Module):
         metadata: torch.Tensor,
         second_images: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
+        if not self.use_image:
+            embedding = torch.zeros(
+                images.shape[0], self.backbone.num_features, device=images.device, dtype=images.dtype
+            )
+            projection = self.projection_head(embedding)
+            output = self.classify(embedding, metadata)
+            output["image_diagnosis"] = self.image_classifier(embedding)
+            output["projection"] = projection
+            return output
+
         if second_images is None:
             embedding, projection = self.encode_images(images)
             output = self.classify(embedding, metadata)

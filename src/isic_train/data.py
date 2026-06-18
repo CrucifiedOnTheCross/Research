@@ -48,10 +48,14 @@ def _metadata_vector(row: pd.Series) -> np.ndarray:
 
 
 class ISICDataset(Dataset):
-    def __init__(self, frame: pd.DataFrame, images_dir: Path, image_size: int, training: bool) -> None:
+    def __init__(
+        self, frame: pd.DataFrame, images_dir: Path, image_size: int,
+        training: bool, two_views: bool = True,
+    ) -> None:
         self.frame = frame.reset_index(drop=True)
         self.images_dir = images_dir
         self.training = training
+        self.two_views = two_views
         normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         self.train_transform = transforms.Compose([
             transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0), interpolation=InterpolationMode.BICUBIC),
@@ -75,7 +79,7 @@ class ISICDataset(Dataset):
         with Image.open(image_path) as handle:
             image = handle.convert("RGB")
         view1 = self.train_transform(image) if self.training else self.eval_transform(image)
-        view2 = self.train_transform(image) if self.training else view1.clone()
+        view2 = self.train_transform(image) if self.training and self.two_views else view1.clone()
         target = int(row[CLASS_NAMES].to_numpy(dtype=np.float32).argmax())
         class_name = CLASS_NAMES[target]
         return {
@@ -106,7 +110,9 @@ def _load_frame(cfg: dict) -> tuple[pd.DataFrame, Path]:
     return frame, images_dir
 
 
-def create_dataloaders(cfg: dict, seed: int, batch_size: int) -> DataBundle:
+def create_dataloaders(
+    cfg: dict, seed: int, batch_size: int, two_views: bool = True
+) -> DataBundle:
     frame, images_dir = _load_frame(cfg)
     folds = max(2, round(1.0 / float(cfg["val_fraction"])))
     splitter = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
@@ -135,7 +141,7 @@ def create_dataloaders(cfg: dict, seed: int, batch_size: int) -> DataBundle:
     if int(cfg["num_workers"]) > 0:
         common["prefetch_factor"] = int(cfg.get("prefetch_factor", 2))
     train_loader = DataLoader(
-        ISICDataset(train_frame, images_dir, int(cfg["image_size"]), True),
+        ISICDataset(train_frame, images_dir, int(cfg["image_size"]), True, two_views),
         shuffle=shuffle, sampler=sampler, drop_last=True, **common,
     )
     val_loader = DataLoader(

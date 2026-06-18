@@ -21,6 +21,8 @@ data:
 model:
   backbone: convnextv2_base.fcmae_ft_in22k_in1k
   pretrained: true
+  use_image: true
+  use_metadata: true
   metadata_hidden_dim: 128
   metadata_embedding_dim: 128
   projection_dim: 128
@@ -38,6 +40,8 @@ training:
   amp_dtype: bfloat16
   channels_last: true
   compile: true
+  two_views: true
+  use_class_weights: false
   gradient_clip_norm: 1.0
   early_stopping_patience: 10
   resume: null

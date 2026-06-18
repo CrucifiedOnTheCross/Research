@@ -1,0 +1,50 @@
+experiment:
+  name: convnextv2_base_multitask_supcon
+  output_dir: runs
+  seed: 42
+  deterministic: false
+
+data:
+  root: /data/isic2019
+  images_dir: ISIC_2019_Training_Input
+  labels_csv: ISIC_2019_Training_GroundTruth.csv
+  metadata_csv: ISIC_2019_Training_Metadata.csv
+  image_size: 224
+  val_fraction: 0.2
+  split_fold: 0
+  num_workers: 12
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+  class_balanced_sampling: true
+
+model:
+  backbone: convnextv2_base.fcmae_ft_in22k_in1k
+  pretrained: true
+  metadata_hidden_dim: 128
+  metadata_embedding_dim: 128
+  projection_dim: 128
+  dropout: 0.25
+
+training:
+  epochs: 50
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  learning_rate: 0.0002
+  backbone_learning_rate: 0.00005
+  weight_decay: 0.05
+  warmup_epochs: 3
+  label_smoothing: 0.1
+  amp_dtype: bfloat16
+  channels_last: true
+  compile: true
+  gradient_clip_norm: 1.0
+  early_stopping_patience: 10
+  resume: null
+  loss_weights:
+    diagnosis: 1.0
+    image_diagnosis: 0.3
+    melanoma: 0.5
+    malignant: 0.5
+    supcon: 0.2
+  supcon_temperature: 0.07

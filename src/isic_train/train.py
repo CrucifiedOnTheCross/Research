@@ -97,6 +97,8 @@ def train_epoch(
         if cfg.get("channels_last", True):
             images = images.contiguous(memory_format=torch.channels_last)
             second_images = second_images.contiguous(memory_format=torch.channels_last)
+        if cfg.get("compile", True):
+            torch.compiler.cudagraph_mark_step_begin()
         with autocast_context(cfg["amp_dtype"]):
             outputs = model(images, batch["metadata"], second_images)
             loss, parts = loss_function(
@@ -131,6 +133,8 @@ def validate(model: nn.Module, loader, cfg: dict, device: torch.device) -> dict[
         metadata = batch["metadata"].to(device, non_blocking=True)
         if cfg.get("channels_last", True):
             images = images.contiguous(memory_format=torch.channels_last)
+        if cfg.get("compile", True):
+            torch.compiler.cudagraph_mark_step_begin()
         with autocast_context(cfg["amp_dtype"]):
             outputs = model(images, metadata)
         targets.append(batch["target"].numpy())
@@ -213,7 +217,9 @@ def main() -> None:
 
     raw_model = model
     if train_cfg.get("compile", True):
-        model = torch.compile(model, mode="max-autotune")
+        model = torch.compile(
+            model, options={"max_autotune": True, "triton.cudagraphs": False}
+        )
     started = time.time()
     try:
         write_json(run_dir / "status.json", {"state": "running", "started_unix": started})

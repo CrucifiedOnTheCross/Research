@@ -1,0 +1,10 @@
+.git
+.gitignore
+.cache
+data
+runs
+server-results
+__pycache__
+*.pyc
+*.pt
+*.zip

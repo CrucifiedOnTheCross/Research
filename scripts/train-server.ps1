@@ -27,7 +27,8 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
     $trainingArguments += @("--resume", "/workspace/runs/$normalizedResume")
 }
 
-$containerId = & docker compose run --rm -d trainer @trainingArguments
+$containerName = "isic-trainer-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$containerId = & docker compose run -d --name $containerName trainer @trainingArguments
 if ($LASTEXITCODE -ne 0) { throw "Cannot start training container" }
 $containerId = ([string]$containerId).Trim()
 $containerId | Set-Content -LiteralPath (Join-Path $ProjectDir "last-container-id.txt")

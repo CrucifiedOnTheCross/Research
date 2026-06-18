@@ -6,13 +6,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script = Join-Path $ProjectDir "scripts\prepare-and-train-server.ps1"
-$stdout = Join-Path $ProjectDir "pipeline-stdout.log"
-$stderr = Join-Path $ProjectDir "pipeline-stderr.log"
-$arguments = @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$script`"",
-    "-ProjectDir", "`"$ProjectDir`"", "-DataDir", "`"$DataDir`""
-)
-$process = Start-Process -FilePath "powershell.exe" -ArgumentList ($arguments -join ' ') `
-    -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-$process.Id | Set-Content -LiteralPath (Join-Path $ProjectDir "pipeline.pid")
-Write-Host "Dataset/training pipeline started, PID=$($process.Id)"
+$arguments = "-NoProfile -ExecutionPolicy Bypass -File $script -ProjectDir $ProjectDir -DataDir $DataDir"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Days 7)
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $currentUser `
+    -LogonType S4U -RunLevel Limited
+Register-ScheduledTask -TaskName "ISIC Dataset and Training Pipeline" -Action $action `
+    -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName "ISIC Dataset and Training Pipeline"
+Write-Host "Dataset/training pipeline started as Windows scheduled task."

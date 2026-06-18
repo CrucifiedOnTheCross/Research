@@ -6,7 +6,6 @@ services:
     ipc: host
     init: true
     gpus: all
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ${ISIC_DATA_DIR:-./data/isic2019}:/data/isic2019:ro
       - ${RUNS_DIR:-./runs}:/workspace/runs
@@ -14,6 +13,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       TORCH_HOME: /cache/torch
+      HF_HOME: /cache/torch/huggingface
+      XDG_CACHE_HOME: /cache/torch
       OMP_NUM_THREADS: ${OMP_NUM_THREADS:-8}
       MKL_NUM_THREADS: ${MKL_NUM_THREADS:-8}
     command: ["--config", "configs/train.yaml"]

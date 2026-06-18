@@ -213,6 +213,18 @@ channels-last, `torch.compile`, 12 DataLoader workers и gradient accumulation.
 снизить скорость и не гарантирует побитовую идентичность между разными версиями GPU,
 CUDA и PyTorch.
 
+Цикл не копирует scalar loss на CPU на каждом батче: метрики накапливаются на GPU и
+переносятся один раз в конце эпохи. Validation-предсказания также передаются одним
+пакетом, а metadata/targets предвычисляются до запуска DataLoader workers. Это не
+меняет loss, аугментации, порядок примеров или эффективный batch size. В TensorBoard
+для новых запусков записываются `performance/train_images_per_second` и
+`performance/validation_images_per_second`.
+
+Готовые аугментированные батчи намеренно не кешируются: такой кеш заморозил бы
+случайные crop/color jitter. Исходные JPEG занимают около 9.1 GB и обслуживаются
+системным файловым кешем; явный RAM-кеш имеет смысл только после измеренного
+I/O bottleneck.
+
 ### Мониторинг GPU
 
 Фоновая задача `ISIC GPU Monitor` каждые 5 секунд записывает utilization, VRAM,

@@ -55,7 +55,7 @@ def loss_function(
     binary_loss: nn.Module,
     supcon_loss: nn.Module,
     weights: dict[str, float],
-) -> tuple[torch.Tensor, dict[str, float]]:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     zero = outputs["diagnosis"].sum() * 0.0
     losses = {
         "diagnosis": diagnosis_loss(outputs["diagnosis"], batch["target"]),
@@ -69,7 +69,9 @@ def loss_function(
         if float(weights["supcon"]) > 0 else zero,
     }
     total = sum(losses[name] * float(weights[name]) for name in losses)
-    return total, {name: float(value.detach()) for name, value in losses.items()}
+    # Keep metric accumulation on the GPU. Calling float(tensor) here forces a
+    # device synchronization for every loss component on every batch.
+    return total, {name: value.detach() for name, value in losses.items()}
 
 
 def train_epoch(
@@ -89,8 +91,8 @@ def train_epoch(
     optimizer.zero_grad(set_to_none=True)
     accumulation = int(cfg["gradient_accumulation_steps"])
     totals = {
-        "loss": 0.0, "diagnosis": 0.0, "image_diagnosis": 0.0,
-        "melanoma": 0.0, "malignant": 0.0, "supcon": 0.0,
+        name: torch.zeros((), device=device)
+        for name in ("loss", "diagnosis", "image_diagnosis", "melanoma", "malignant", "supcon")
     }
     progress = tqdm(loader, desc=f"train {epoch}", dynamic_ncols=True)
     for step, batch in enumerate(progress):
@@ -128,11 +130,13 @@ def train_epoch(
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()
-        totals["loss"] += float(loss.detach())
+        totals["loss"].add_(loss.detach())
         for name, value in parts.items():
-            totals[name] += value
-        progress.set_postfix(loss=f"{float(loss.detach()):.4f}")
-    return {name: value / len(loader) for name, value in totals.items()}
+            totals[name].add_(value)
+    # A single device-to-host transfer replaces several synchronizations per batch.
+    names = list(totals)
+    values = torch.stack([totals[name] for name in names]).cpu().tolist()
+    return {name: value / len(loader) for name, value in zip(names, values, strict=True)}
 
 
 @torch.inference_mode()
@@ -151,15 +155,18 @@ def validate(model: nn.Module, loader, cfg: dict, device: torch.device) -> dict[
         with autocast_context(cfg["amp_dtype"]):
             outputs = model(images, metadata)
         targets.append(batch["target"].numpy())
-        probabilities.append(outputs["diagnosis"].softmax(dim=1).float().cpu().numpy())
+        probabilities.append(outputs["diagnosis"].softmax(dim=1).float())
         melanoma_targets.append(batch["melanoma"].numpy())
-        melanoma_probabilities.append(outputs["melanoma"].sigmoid().float().cpu().numpy())
+        melanoma_probabilities.append(outputs["melanoma"].sigmoid().float())
         malignant_targets.append(batch["malignant"].numpy())
-        malignant_probabilities.append(outputs["malignant"].sigmoid().float().cpu().numpy())
+        malignant_probabilities.append(outputs["malignant"].sigmoid().float())
+    probabilities_np = torch.cat(probabilities).cpu().numpy()
+    melanoma_probabilities_np = torch.cat(melanoma_probabilities).cpu().numpy()
+    malignant_probabilities_np = torch.cat(malignant_probabilities).cpu().numpy()
     return classification_metrics(
-        np.concatenate(targets), np.concatenate(probabilities),
-        np.concatenate(melanoma_targets), np.concatenate(melanoma_probabilities),
-        np.concatenate(malignant_targets), np.concatenate(malignant_probabilities),
+        np.concatenate(targets), probabilities_np,
+        np.concatenate(melanoma_targets), melanoma_probabilities_np,
+        np.concatenate(malignant_targets), malignant_probabilities_np,
     )
 
 
@@ -245,12 +252,20 @@ def main() -> None:
     try:
         write_json(run_dir / "status.json", {"state": "running", "started_unix": started})
         for epoch in range(start_epoch, int(train_cfg["epochs"]) + 1):
+            train_started = time.perf_counter()
             train_metrics = train_epoch(
                 model, data.train_loader, optimizer, scheduler, scaler,
                 diagnosis_loss, binary_loss, supcon_loss, train_cfg, device, epoch,
             )
+            train_seconds = time.perf_counter() - train_started
+            validation_started = time.perf_counter()
             val_metrics = validate(model, data.val_loader, train_cfg, device)
+            validation_seconds = time.perf_counter() - validation_started
             record = {"epoch": epoch, "elapsed_seconds": time.time() - started,
+                      "train_seconds": train_seconds,
+                      "validation_seconds": validation_seconds,
+                      "train_images_per_second": data.train_size / train_seconds,
+                      "validation_images_per_second": data.val_size / validation_seconds,
                       "train": train_metrics, "validation": val_metrics}
             append_jsonl(run_dir / "metrics.jsonl", record)
             write_json(run_dir / "status.json", {
@@ -261,6 +276,10 @@ def main() -> None:
                 writer.add_scalar(f"train/{name}", value, epoch)
             for name in ("accuracy", "balanced_accuracy", "macro_f1", "weighted_f1", "mcc"):
                 writer.add_scalar(f"validation/{name}", val_metrics[name], epoch)
+            writer.add_scalar("performance/train_seconds", train_seconds, epoch)
+            writer.add_scalar("performance/validation_seconds", validation_seconds, epoch)
+            writer.add_scalar("performance/train_images_per_second", data.train_size / train_seconds, epoch)
+            writer.add_scalar("performance/validation_images_per_second", data.val_size / validation_seconds, epoch)
             writer.add_scalar("validation/melanoma_recall", val_metrics["melanoma"]["recall"], epoch)
             writer.add_scalar("validation/malignant_recall", val_metrics["malignant"]["recall"], epoch)
             writer.flush()

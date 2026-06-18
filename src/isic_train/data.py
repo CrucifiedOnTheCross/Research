@@ -52,10 +52,25 @@ class ISICDataset(Dataset):
         self, frame: pd.DataFrame, images_dir: Path, image_size: int,
         training: bool, two_views: bool = True,
     ) -> None:
-        self.frame = frame.reset_index(drop=True)
         self.images_dir = images_dir
         self.training = training
         self.two_views = two_views
+        frame = frame.reset_index(drop=True)
+        # Pandas row indexing and metadata parsing are surprisingly expensive in
+        # DataLoader workers. Materialize the small, immutable fields once while
+        # keeping JPEG decoding and random augmentation fully dynamic.
+        self.image_ids = frame["image"].astype(str).tolist()
+        self.targets = frame[CLASS_NAMES].to_numpy(dtype=np.float32).argmax(axis=1).astype(np.int64)
+        self.metadata = np.stack(
+            [_metadata_vector(row) for _, row in frame.iterrows()]
+        ).astype(np.float32, copy=False)
+        self.melanoma = (self.targets == CLASS_NAMES.index("MEL")).astype(np.float32)
+        malignant_indices = {CLASS_NAMES.index(name) for name in MALIGNANT_CLASSES}
+        self.malignant = np.fromiter(
+            (target in malignant_indices for target in self.targets),
+            dtype=np.float32,
+            count=len(self.targets),
+        )
         normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         self.train_transform = transforms.Compose([
             transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0), interpolation=InterpolationMode.BICUBIC),
@@ -71,25 +86,24 @@ class ISICDataset(Dataset):
         ])
 
     def __len__(self) -> int:
-        return len(self.frame)
+        return len(self.image_ids)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
-        row = self.frame.iloc[index]
-        image_path = self.images_dir / f"{row['image']}.jpg"
+        image_id = self.image_ids[index]
+        image_path = self.images_dir / f"{image_id}.jpg"
         with Image.open(image_path) as handle:
             image = handle.convert("RGB")
         view1 = self.train_transform(image) if self.training else self.eval_transform(image)
         view2 = self.train_transform(image) if self.training and self.two_views else view1.clone()
-        target = int(row[CLASS_NAMES].to_numpy(dtype=np.float32).argmax())
-        class_name = CLASS_NAMES[target]
+        target = int(self.targets[index])
         return {
             "image1": view1,
             "image2": view2,
-            "metadata": torch.from_numpy(_metadata_vector(row)),
+            "metadata": torch.from_numpy(self.metadata[index]),
             "target": torch.tensor(target, dtype=torch.long),
-            "melanoma": torch.tensor(float(class_name == "MEL")),
-            "malignant": torch.tensor(float(class_name in MALIGNANT_CLASSES)),
-            "image_id": str(row["image"]),
+            "melanoma": torch.tensor(self.melanoma[index]),
+            "malignant": torch.tensor(self.malignant[index]),
+            "image_id": image_id,
         }
 
 

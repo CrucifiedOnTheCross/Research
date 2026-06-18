@@ -49,7 +49,13 @@ foreach ($experiment in $queue.experiments) {
     $logPath = Join-Path $logsDir "$name.log"
     $arguments = @("compose", "run", "--name", $containerName, "trainer",
                    "--config", "configs/train.yaml", "--set", "experiment.name=$name")
-    foreach ($override in $experiment.args) { $arguments += @("--set", [string]$override) }
+    $overrides = @($experiment.args | ForEach-Object { [string]$_ })
+    # One-view 224px runs keep effective optimizer batch 32 while avoiding the
+    # overhead of a second microbatch and gradient-accumulation iteration.
+    if ($overrides -contains "training.two_views=false") {
+        $overrides += @("training.batch_size=32", "training.gradient_accumulation_steps=1")
+    }
+    foreach ($override in $overrides) { $arguments += @("--set", $override) }
     & docker @arguments 2>&1 | Tee-Object -FilePath $logPath
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {

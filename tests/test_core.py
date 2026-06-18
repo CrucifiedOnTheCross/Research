@@ -1,7 +1,9 @@
+import pandas as pd
 import torch
+from PIL import Image
 
 from isic_train.config import apply_overrides, load_config
-from isic_train.data import metadata_dimension
+from isic_train.data import CLASS_NAMES, ISICDataset, metadata_dimension
 from isic_train.losses import SupConLoss
 from isic_train.model import ISICMultimodalModel
 
@@ -37,3 +39,20 @@ def test_metadata_only_forward() -> None:
     output = model(torch.zeros(2, 3, 32, 32), torch.zeros(2, metadata_dimension()))
     assert output["diagnosis"].shape == (2, 8)
     assert output["melanoma"].shape == (2,)
+
+
+def test_dataset_precomputes_labels_and_metadata(tmp_path) -> None:
+    row = {name: float(name == "MEL") for name in CLASS_NAMES}
+    row.update({
+        "image": "sample", "age_approx": 50, "sex": "female",
+        "anatom_site_general": "head/neck",
+    })
+    Image.new("RGB", (256, 256), color=(64, 128, 192)).save(tmp_path / "sample.jpg")
+    dataset = ISICDataset(pd.DataFrame([row]), tmp_path, 224, training=False)
+
+    sample = dataset[0]
+    assert sample["target"].item() == CLASS_NAMES.index("MEL")
+    assert sample["melanoma"].item() == 1.0
+    assert sample["malignant"].item() == 1.0
+    assert sample["metadata"].shape == (metadata_dimension(),)
+    assert sample["image1"].shape == (3, 224, 224)

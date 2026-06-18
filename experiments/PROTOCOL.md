@@ -30,3 +30,9 @@ fixed before inspecting subsequent results.
 
 The 384px run keeps effective batch size 32 (`4 × accumulation 8`). The single-view and
 two-view controls isolate the effect of SupCon from the extra augmentation view.
+
+For one-view configurations, execution uses `batch_size=32` and one optimizer step per
+batch instead of the mathematically equivalent `batch_size=16` with two gradient
+accumulation steps. The effective optimizer batch remains 32. Two-view/SupCon and
+384px configurations retain their original microbatch settings, so the SupCon positive
+set is unchanged.

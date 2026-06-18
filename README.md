@@ -89,6 +89,27 @@ echo $! > logs/docker-train.pid
 tail -f logs/docker-train.log
 ```
 
+### Фактический сервер Windows (`lab-bio@10.200.1.180`)
+
+Проект уже размещён в `C:\Users\lab-bio\Research`. После размещения датасета запустите
+обучение одной удалённой командой; контейнер работает в detached-режиме и не завершится
+при закрытии SSH:
+
+```powershell
+ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
+  -File C:\Users\lab-bio\Research\scripts\train-server.ps1 `
+  -DataDir D:\Datasets\isic2019
+```
+
+Скрипт выведет ID контейнера. Текущий ID также хранится в
+`C:\Users\lab-bio\Research\last-container-id.txt`. Проверить состояние и смотреть лог:
+
+```powershell
+ssh lab-bio@10.200.1.180 docker ps
+$id = ssh lab-bio@10.200.1.180 type C:\Users\lab-bio\Research\last-container-id.txt
+ssh lab-bio@10.200.1.180 docker logs -f $id
+```
+
 Возобновление из checkpoint:
 
 ```bash

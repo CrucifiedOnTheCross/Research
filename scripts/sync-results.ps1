@@ -1,11 +1,15 @@
+[CmdletBinding()]
 param(
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
-    [string]$LocalRuns = (Join-Path $PSScriptRoot "..\server-results"),
+    [string]$LocalRuns = "",
     [switch]$IncludeLastCheckpoint
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($LocalRuns)) {
+    $LocalRuns = Join-Path $PSScriptRoot "..\server-results"
+}
 $localRoot = [System.IO.Path]::GetFullPath($LocalRuns)
 New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
 
@@ -15,21 +19,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "Cannot obtain result manifest from $Server"
 }
 
-$manifest = @($manifestJson | ConvertFrom-Json)
+$decodedManifest = $manifestJson | ConvertFrom-Json
+$manifest = [System.Collections.Generic.List[object]]::new()
+foreach ($record in $decodedManifest) { $manifest.Add($record) }
+Write-Verbose "manifest records=$($manifest.Count) raw_length=$(([string]$manifestJson).Length)"
 $completedRuns = @{}
 foreach ($entry in $manifest) {
-    if ($entry.relative -match '^([^/]+)/status\.json$') {
-        $runName = $Matches[1]
-        $statusText = & ssh -o BatchMode=yes $Server "type `"$RemoteProject\runs\$runName\status.json`""
-        if ($LASTEXITCODE -eq 0) {
-            try {
-                $status = $statusText | ConvertFrom-Json
-                $completedRuns[$runName] = $status.state -eq "completed"
-            } catch {
-                $completedRuns[$runName] = $false
-            }
-        }
-    }
+    $runName = (([string]$entry.relative) -split '/', 2)[0]
+    $completedRuns[$runName] = $entry.run_state -eq "completed"
 }
 
 $alwaysSync = @(
@@ -48,6 +45,7 @@ foreach ($entry in $manifest) {
     $wanted = $leaf -in $alwaysSync
     $wanted = $wanted -or ($isCompleted -and $fileWithinRun -eq "best.pt")
     $wanted = $wanted -or ($isCompleted -and $IncludeLastCheckpoint -and $fileWithinRun -eq "last.pt")
+    Write-Verbose "run=$runName file=$fileWithinRun state=$($entry.run_state) completed=$isCompleted wanted=$wanted"
     if (-not $wanted) { continue }
 
     $destination = Join-Path $localRoot ($entry.relative.Replace('/', '\'))

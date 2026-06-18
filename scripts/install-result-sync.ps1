@@ -2,11 +2,14 @@ param(
     [int]$IntervalMinutes = 10,
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
-    [string]$LocalRuns = (Join-Path $PSScriptRoot "..\server-results"),
+    [string]$LocalRuns = "",
     [switch]$IncludeLastCheckpoint
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($LocalRuns)) {
+    $LocalRuns = Join-Path $PSScriptRoot "..\server-results"
+}
 $syncScript = (Resolve-Path (Join-Path $PSScriptRoot "sync-results.ps1")).Path
 $arguments = @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$syncScript`"",

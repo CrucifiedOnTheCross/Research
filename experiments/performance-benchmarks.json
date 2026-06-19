@@ -1,0 +1,17 @@
+{
+  "protocol": "rtx5080_throughput_v1",
+  "experiments": [
+    {
+      "name": "perf_supcon_b16_acc2",
+      "args": ["training.batch_size=16", "training.gradient_accumulation_steps=2"]
+    },
+    {
+      "name": "perf_supcon_b24_acc1",
+      "args": ["training.batch_size=24", "training.gradient_accumulation_steps=1"]
+    },
+    {
+      "name": "perf_supcon_b32_acc1",
+      "args": ["training.batch_size=32", "training.gradient_accumulation_steps=1"]
+    }
+  ]
+}

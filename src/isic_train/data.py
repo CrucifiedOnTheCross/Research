@@ -60,17 +60,23 @@ class ISICDataset(Dataset):
         # DataLoader workers. Materialize the small, immutable fields once while
         # keeping JPEG decoding and random augmentation fully dynamic.
         self.image_ids = frame["image"].astype(str).tolist()
-        self.targets = frame[CLASS_NAMES].to_numpy(dtype=np.float32).argmax(axis=1).astype(np.int64)
-        self.metadata = np.stack(
+        targets = frame[CLASS_NAMES].to_numpy(dtype=np.float32).argmax(axis=1).astype(np.int64)
+        metadata = np.stack(
             [_metadata_vector(row) for _, row in frame.iterrows()]
         ).astype(np.float32, copy=False)
-        self.melanoma = (self.targets == CLASS_NAMES.index("MEL")).astype(np.float32)
+        melanoma = (targets == CLASS_NAMES.index("MEL")).astype(np.float32)
         malignant_indices = {CLASS_NAMES.index(name) for name in MALIGNANT_CLASSES}
-        self.malignant = np.fromiter(
-            (target in malignant_indices for target in self.targets),
+        malignant = np.fromiter(
+            (target in malignant_indices for target in targets),
             dtype=np.float32,
-            count=len(self.targets),
+            count=len(targets),
         )
+        # These fields are immutable. Building their tensors once avoids several
+        # tiny allocations for every sample in every DataLoader worker.
+        self.targets = torch.from_numpy(targets)
+        self.metadata = torch.from_numpy(metadata)
+        self.melanoma = torch.from_numpy(melanoma)
+        self.malignant = torch.from_numpy(malignant)
         normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         self.train_transform = transforms.Compose([
             transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0), interpolation=InterpolationMode.BICUBIC),
@@ -94,17 +100,19 @@ class ISICDataset(Dataset):
         with Image.open(image_path) as handle:
             image = handle.convert("RGB")
         view1 = self.train_transform(image) if self.training else self.eval_transform(image)
-        view2 = self.train_transform(image) if self.training and self.two_views else view1.clone()
-        target = int(self.targets[index])
-        return {
+        sample = {
             "image1": view1,
-            "image2": view2,
-            "metadata": torch.from_numpy(self.metadata[index]),
-            "target": torch.tensor(target, dtype=torch.long),
-            "melanoma": torch.tensor(self.melanoma[index]),
-            "malignant": torch.tensor(self.malignant[index]),
+            "metadata": self.metadata[index],
+            "target": self.targets[index],
+            "melanoma": self.melanoma[index],
+            "malignant": self.malignant[index],
             "image_id": image_id,
         }
+        # Do not clone, pin and transfer a second full image when the experiment
+        # does not use two-view contrastive learning.
+        if self.training and self.two_views:
+            sample["image2"] = self.train_transform(image)
+        return sample
 
 
 def _load_frame(cfg: dict) -> tuple[pd.DataFrame, Path]:

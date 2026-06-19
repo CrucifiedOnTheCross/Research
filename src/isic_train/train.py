@@ -101,7 +101,7 @@ def train_epoch(
             for key, value in batch.items()
         }
         images = batch["image1"]
-        second_images = batch["image2"] if cfg.get("two_views", True) else None
+        second_images = batch.get("image2")
         if cfg.get("channels_last", True):
             images = images.contiguous(memory_format=torch.channels_last)
             if second_images is not None:
@@ -124,8 +124,10 @@ def train_epoch(
         scaler.scale(scaled_loss).backward()
         should_step = (step + 1) % accumulation == 0 or step + 1 == len(loader)
         if should_step:
-            scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), float(cfg["gradient_clip_norm"]))
+            clip_norm = cfg.get("gradient_clip_norm")
+            if clip_norm is not None and float(clip_norm) > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), float(clip_norm))
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
@@ -245,9 +247,13 @@ def main() -> None:
 
     raw_model = model
     if train_cfg.get("compile", True):
-        model = torch.compile(
-            model, options={"max_autotune": True, "triton.cudagraphs": False}
-        )
+        compile_mode = str(train_cfg.get("compile_mode", "max-autotune-no-cudagraphs"))
+        if compile_mode == "max-autotune-no-cudagraphs":
+            model = torch.compile(
+                model, options={"max_autotune": True, "triton.cudagraphs": False}
+            )
+        else:
+            model = torch.compile(model, mode=compile_mode)
     started = time.time()
     try:
         write_json(run_dir / "status.json", {"state": "running", "started_unix": started})
@@ -290,8 +296,8 @@ def main() -> None:
                 "best_mcc": max(best_mcc, float(val_metrics["mcc"])),
                 "rng_state": capture_rng_state(), "config": config,
             }
-            torch.save(checkpoint, run_dir / "last.pt")
-            if float(val_metrics["mcc"]) > best_mcc:
+            improved = float(val_metrics["mcc"]) > best_mcc
+            if improved:
                 best_mcc = float(val_metrics["mcc"])
                 patience = 0
                 torch.save({
@@ -301,7 +307,14 @@ def main() -> None:
                 write_json(run_dir / "best_metrics.json", val_metrics)
             else:
                 patience += 1
-            if patience >= int(train_cfg["early_stopping_patience"]):
+            checkpoint_interval = max(1, int(train_cfg.get("checkpoint_interval", 1)))
+            stopping = patience >= int(train_cfg["early_stopping_patience"])
+            if epoch % checkpoint_interval == 0 or epoch == int(train_cfg["epochs"]) or stopping:
+                # Refresh best_mcc after evaluating this epoch before persisting
+                # the resumable optimizer/scheduler/RNG state.
+                checkpoint["best_mcc"] = best_mcc
+                torch.save(checkpoint, run_dir / "last.pt")
+            if stopping:
                 break
         write_json(run_dir / "status.json", {
             "state": "completed", "started_unix": started,

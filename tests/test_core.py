@@ -56,3 +56,18 @@ def test_dataset_precomputes_labels_and_metadata(tmp_path) -> None:
     assert sample["malignant"].item() == 1.0
     assert sample["metadata"].shape == (metadata_dimension(),)
     assert sample["image1"].shape == (3, 224, 224)
+    assert "image2" not in sample
+
+
+def test_dataset_only_creates_second_view_when_requested(tmp_path) -> None:
+    row = {name: float(name == "NV") for name in CLASS_NAMES}
+    row.update({"image": "sample", "age_approx": 40, "sex": "male",
+                "anatom_site_general": "upper extremity"})
+    Image.new("RGB", (256, 256), color=(32, 64, 96)).save(tmp_path / "sample.jpg")
+
+    dataset = ISICDataset(
+        pd.DataFrame([row]), tmp_path, 224, training=True, two_views=True,
+    )
+    sample = dataset[0]
+    assert sample["image2"].shape == sample["image1"].shape
+    assert sample["image2"].data_ptr() != sample["image1"].data_ptr()

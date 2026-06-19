@@ -40,9 +40,13 @@ training:
   amp_dtype: bfloat16
   channels_last: true
   compile: true
+  # Baseline preserves the proven numerics; benchmarks may select
+  # max-autotune or reduce-overhead after validation.
+  compile_mode: max-autotune-no-cudagraphs
   two_views: true
   use_class_weights: false
   gradient_clip_norm: 1.0
+  checkpoint_interval: 2
   early_stopping_patience: 10
   resume: null
   loss_weights:

@@ -276,3 +276,15 @@ ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
 ```bash
 docker run --rm --entrypoint pytest isic2019-trainer:latest -q
 ```
+### RTX 5080 throughput benchmark
+
+Run benchmarks only while the experiment queue is stopped and the GPU is idle:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-performance-benchmark.ps1
+```
+
+The benchmark compares physical batch sizes for the two-view SupCon workload.
+Epoch one is treated as compile/autotune warm-up; steady-state
+`train_images_per_second` is written to `performance-benchmark-results.json`.
+The script refuses to start when another training container is active.

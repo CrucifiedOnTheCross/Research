@@ -14,7 +14,11 @@ $localRoot = [System.IO.Path]::GetFullPath($LocalRuns)
 New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
 
 $manifestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$RemoteProject/scripts/result-manifest.ps1`" -RunsDir `"$RemoteProject/runs`""
-$manifestJson = & ssh -o BatchMode=yes -o ConnectTimeout=15 $Server $manifestCommand
+$sshOptions = @(
+    "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+    "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"
+)
+$manifestJson = & ssh @sshOptions $Server $manifestCommand
 if ($LASTEXITCODE -ne 0) {
     throw "Cannot obtain result manifest from $Server"
 }
@@ -60,7 +64,7 @@ foreach ($entry in $manifest) {
     $partial = "$destination.part"
     Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
     $remotePath = "$Server`:$RemoteProject/runs/$($entry.relative)"
-    & scp -q -o BatchMode=yes -o ConnectTimeout=15 $remotePath $partial
+    & scp -q @sshOptions $remotePath $partial
     if ($LASTEXITCODE -ne 0) {
         throw "Download failed: $($entry.relative)"
     }
@@ -79,7 +83,7 @@ $telemetryDestination = Join-Path $telemetryDirectory "gpu-snapshots.csv"
 $telemetryPartial = "$telemetryDestination.part"
 New-Item -ItemType Directory -Force -Path $telemetryDirectory | Out-Null
 Remove-Item -LiteralPath $telemetryPartial -Force -ErrorAction SilentlyContinue
-& scp -q -o BatchMode=yes -o ConnectTimeout=15 `
+& scp -q @sshOptions `
     "$Server`:$RemoteProject/gpu-telemetry/gpu-snapshots.csv" $telemetryPartial 2>$null
 if ($LASTEXITCODE -eq 0) {
     Move-Item -LiteralPath $telemetryPartial -Destination $telemetryDestination -Force

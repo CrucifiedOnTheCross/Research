@@ -184,6 +184,21 @@ ssh -N -L 6006:127.0.0.1:6006 lab-bio@10.200.1.180
 
 После этого интерфейс доступен на `http://localhost:6006`.
 
+### Автоматическое восстановление подключения
+
+Локальная задача `ISIC Research Connectivity` запускается при входе в Windows и
+каждые 2 минуты. Она восстанавливает SSH-туннель TensorBoard с keepalive и выгружает
+результаты минимум раз в 10 минут; после пропажи сети повтор происходит автоматически.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\install-connectivity-watchdog.ps1
+```
+
+Текущее состояние записывается в `server-results/connectivity-state.json`, события —
+в `server-results/connectivity-watchdog.log`. Повторная установка безопасна и заменяет
+предыдущую задачу синхронизации.
+
 ## Очередь исследовательских экспериментов
 
 Предзарегистрированный план находится в `experiments/PROTOCOL.md`, а машинная очередь

@@ -3,6 +3,7 @@ param(
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
     [string]$LocalRuns = "",
+    [switch]$IncludeBestCheckpoint,
     [switch]$IncludeLastCheckpoint
 )
 
@@ -16,6 +17,7 @@ $arguments = @(
     "-Server", "`"$Server`"", "-RemoteProject", "`"$RemoteProject`"",
     "-LocalRuns", "`"$LocalRuns`""
 )
+if ($IncludeBestCheckpoint) { $arguments += "-IncludeBestCheckpoint" }
 if ($IncludeLastCheckpoint) { $arguments += "-IncludeLastCheckpoint" }
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ($arguments -join ' ')

@@ -3,6 +3,7 @@ param(
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
     [string]$LocalRuns = "",
+    [switch]$IncludeBestCheckpoint,
     [switch]$IncludeLastCheckpoint
 )
 
@@ -40,14 +41,30 @@ $alwaysSync = @(
 $downloaded = 0
 $skipped = 0
 
+function Install-DownloadedFile([string]$Partial, [string]$Destination) {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Destination) {
+                Remove-Item -LiteralPath $Destination -Force
+            }
+            [System.IO.File]::Move($Partial, $Destination)
+            return
+        } catch {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
 foreach ($entry in $manifest) {
     $parts = $entry.relative -split '/', 2
     if ($parts.Count -ne 2) { continue }
     $runName, $fileWithinRun = $parts
     $leaf = Split-Path $fileWithinRun -Leaf
     $isCompleted = $completedRuns.ContainsKey($runName) -and $completedRuns[$runName]
+    $isMutable = [string]$entry.run_state -eq "running"
     $wanted = $leaf -in $alwaysSync
-    $wanted = $wanted -or ($isCompleted -and $fileWithinRun -eq "best.pt")
+    $wanted = $wanted -or ($isCompleted -and $IncludeBestCheckpoint -and $fileWithinRun -eq "best.pt")
     $wanted = $wanted -or ($isCompleted -and $IncludeLastCheckpoint -and $fileWithinRun -eq "last.pt")
     Write-Verbose "run=$runName file=$fileWithinRun state=$($entry.run_state) completed=$isCompleted wanted=$wanted"
     if (-not $wanted) { continue }
@@ -55,7 +72,7 @@ foreach ($entry in $manifest) {
     $destination = Join-Path $localRoot ($entry.relative.Replace('/', '\'))
     $destinationDir = Split-Path $destination -Parent
     New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
-    if ((Test-Path -LiteralPath $destination) -and
+    if (-not $isMutable -and (Test-Path -LiteralPath $destination) -and
         ((Get-Item -LiteralPath $destination).Length -eq [long]$entry.length)) {
         $skipped++
         continue
@@ -68,10 +85,12 @@ foreach ($entry in $manifest) {
     if ($LASTEXITCODE -ne 0) {
         throw "Download failed: $($entry.relative)"
     }
-    if ((Get-Item -LiteralPath $partial).Length -ne [long]$entry.length) {
+    # Files from an active run can grow after the manifest was generated. Exact
+    # length is required only once a run is immutable/completed.
+    if (-not $isMutable -and (Get-Item -LiteralPath $partial).Length -ne [long]$entry.length) {
         throw "Size check failed: $($entry.relative)"
     }
-    Move-Item -LiteralPath $partial -Destination $destination -Force
+    Install-DownloadedFile $partial $destination
     (Get-Item -LiteralPath $destination).LastWriteTimeUtc = [datetime]::Parse($entry.modified_utc).ToUniversalTime()
     $downloaded++
 }
@@ -79,14 +98,18 @@ foreach ($entry in $manifest) {
 # Keep a rolling local copy of the lightweight GPU telemetry. The remote file may
 # grow during transfer; replacing it atomically still gives a consistent snapshot.
 $telemetryDirectory = Join-Path $localRoot "gpu-telemetry"
-$telemetryDestination = Join-Path $telemetryDirectory "gpu-snapshots.csv"
+$telemetryStamp = [datetime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$telemetryDestination = Join-Path $telemetryDirectory "gpu-snapshots-$telemetryStamp.csv"
 $telemetryPartial = "$telemetryDestination.part"
 New-Item -ItemType Directory -Force -Path $telemetryDirectory | Out-Null
 Remove-Item -LiteralPath $telemetryPartial -Force -ErrorAction SilentlyContinue
 & scp -q @sshOptions `
     "$Server`:$RemoteProject/gpu-telemetry/gpu-snapshots.csv" $telemetryPartial 2>$null
 if ($LASTEXITCODE -eq 0) {
-    Move-Item -LiteralPath $telemetryPartial -Destination $telemetryDestination -Force
+    Install-DownloadedFile $telemetryPartial $telemetryDestination
+    Get-ChildItem $telemetryDirectory -Filter "gpu-snapshots-*.csv" |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 6 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 } else {
     Remove-Item -LiteralPath $telemetryPartial -Force -ErrorAction SilentlyContinue
     Write-Verbose "GPU telemetry is not available yet."

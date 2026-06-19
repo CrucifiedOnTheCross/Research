@@ -199,6 +199,14 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 в `server-results/connectivity-watchdog.log`. Повторная установка безопасна и заменяет
 предыдущую задачу синхронизации.
 
+Автоматически копируются компактные результаты экспериментов: config, environment,
+metrics, status и GPU telemetry. Checkpoints остаются на сервере, чтобы десятки
+абляций не заполнили локальный диск. Нужный `best.pt` можно получить явно:
+
+```powershell
+.\scripts\sync-results.ps1 -IncludeBestCheckpoint
+```
+
 ## Очередь исследовательских экспериментов
 
 Предзарегистрированный план находится в `experiments/PROTOCOL.md`, а машинная очередь

@@ -4,7 +4,8 @@ param(
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
     [string]$LocalRuns = "",
     [int]$LocalPort = 6006,
-    [int]$SyncIntervalMinutes = 10
+    [int]$SyncIntervalMinutes = 10,
+    [int]$CheckIntervalSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +42,7 @@ if ($previousState -and $previousState.last_sync_utc) {
     try { $lastSyncUtc = ([datetime]$previousState.last_sync_utc).ToUniversalTime() } catch { }
 }
 
+while ($true) {
 try {
     $serverHost = ($Server -split '@')[-1]
     $tcpClient = [System.Net.Sockets.TcpClient]::new()
@@ -54,7 +56,8 @@ try {
     }
     if (-not $portReachable) {
         Save-State "offline" "SSH server is not reachable." $lastSyncUtc
-        exit 0
+        Start-Sleep -Seconds $CheckIntervalSeconds
+        continue
     }
 
     $listener = Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue |
@@ -94,8 +97,30 @@ try {
         ([datetime]::UtcNow - $lastSyncUtc).TotalMinutes -ge $SyncIntervalMinutes
     if ($syncDue) {
         Save-State "syncing" "" $lastSyncUtc
-        & $syncScript -Server $Server -RemoteProject $RemoteProject -LocalRuns $localRoot
-        if ($LASTEXITCODE -ne 0) { throw "Result synchronization exited with code $LASTEXITCODE." }
+        $syncStdout = Join-Path $localRoot "result-sync.stdout.log"
+        $syncStderr = Join-Path $localRoot "result-sync.stderr.log"
+        $syncArguments = @(
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", "`"$syncScript`"", "-Server", "`"$Server`"",
+            "-RemoteProject", "`"$RemoteProject`"", "-LocalRuns", "`"$localRoot`""
+        ) -join " "
+        $syncProcess = Start-Process powershell.exe -ArgumentList $syncArguments `
+            -WindowStyle Hidden -RedirectStandardOutput $syncStdout `
+            -RedirectStandardError $syncStderr -PassThru
+        # Force PowerShell 5.1 to retain the native process handle so ExitCode is
+        # populated after WaitForExit when streams are redirected.
+        $null = $syncProcess.Handle
+        if (-not $syncProcess.WaitForExit(300000)) {
+            & taskkill.exe /PID $syncProcess.Id /T /F 2>$null | Out-Null
+            throw "Result synchronization timed out after 5 minutes."
+        }
+        $syncProcess.WaitForExit()
+        $syncProcess.Refresh()
+        $syncExitCode = $syncProcess.ExitCode
+        if ($syncExitCode -ne 0) {
+            $syncError = if (Test-Path $syncStderr) { Get-Content $syncStderr -Tail 1 } else { "" }
+            throw "Result synchronization exited with code $syncExitCode`: $syncError"
+        }
         $lastSyncUtc = [datetime]::UtcNow
         Write-WatchdogLog "Results synchronized."
     }
@@ -103,5 +128,6 @@ try {
 } catch {
     Save-State "error" $_.Exception.Message $lastSyncUtc
     Write-WatchdogLog "ERROR: $($_.Exception.Message)"
-    exit 1
+}
+Start-Sleep -Seconds $CheckIntervalSeconds
 }

@@ -3,9 +3,10 @@ param(
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
     [string]$LocalRuns = "",
-    [int]$LocalPort = 6006,
+    [string]$TensorBoardUrl = "http://10.200.1.180:6006/",
     [int]$SyncIntervalMinutes = 10,
-    [int]$CheckIntervalSeconds = 120
+    [int]$CheckIntervalSeconds = 120,
+    [int]$SyncTimeoutMinutes = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +27,7 @@ function Save-State([string]$Status, [string]$ErrorMessage = "", [datetime]$Last
     [pscustomobject]@{
         status = $Status
         server = $Server
-        local_port = $LocalPort
+        tensorboard_url = $TensorBoardUrl
         checked_utc = [datetime]::UtcNow.ToString("o")
         last_sync_utc = if ($LastSyncUtc -eq [datetime]::MinValue) { $null } else { $LastSyncUtc.ToString("o") }
         error = $ErrorMessage
@@ -60,37 +61,13 @@ try {
         continue
     }
 
-    $listener = Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    $tunnelHealthy = $false
-    if ($listener) {
-        try {
-            $response = Invoke-WebRequest "http://127.0.0.1:$LocalPort/" -UseBasicParsing -TimeoutSec 5
-            $tunnelHealthy = $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
-        } catch { $tunnelHealthy = $false }
-    }
-
-    if (-not $tunnelHealthy) {
-        # Remove only a stale SSH listener belonging to this Research tunnel.
-        foreach ($connection in @(Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue)) {
-            $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($connection.OwningProcess)" -ErrorAction SilentlyContinue
-            if ($process.Name -eq "ssh.exe" -and $process.CommandLine -like "*$Server*" -and
-                $process.CommandLine -like "*6006:127.0.0.1:6006*") {
-                Stop-Process -Id $connection.OwningProcess -Force -ErrorAction SilentlyContinue
-            }
+    try {
+        $response = Invoke-WebRequest $TensorBoardUrl -UseBasicParsing -TimeoutSec 8
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
+            throw "TensorBoard returned HTTP $($response.StatusCode)."
         }
-        $sshArguments = @(
-            "-N", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-            "-o", "ExitOnForwardFailure=yes",
-            "-L", "$LocalPort`:127.0.0.1:6006", $Server
-        )
-        Start-Process -FilePath "ssh.exe" -ArgumentList $sshArguments -WindowStyle Hidden | Out-Null
-        Start-Sleep -Seconds 3
-        $listener = Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if (-not $listener) { throw "SSH tunnel did not start on local port $LocalPort." }
-        Write-WatchdogLog "TensorBoard tunnel started on http://localhost:$LocalPort/."
+    } catch {
+        Write-WatchdogLog "TensorBoard is unavailable at $TensorBoardUrl`: $($_.Exception.Message)"
     }
 
     $syncDue = $lastSyncUtc -eq [datetime]::MinValue -or
@@ -110,9 +87,9 @@ try {
         # Force PowerShell 5.1 to retain the native process handle so ExitCode is
         # populated after WaitForExit when streams are redirected.
         $null = $syncProcess.Handle
-        if (-not $syncProcess.WaitForExit(300000)) {
+        if (-not $syncProcess.WaitForExit($SyncTimeoutMinutes * 60 * 1000)) {
             & taskkill.exe /PID $syncProcess.Id /T /F 2>$null | Out-Null
-            throw "Result synchronization timed out after 5 minutes."
+            throw "Result synchronization timed out after $SyncTimeoutMinutes minutes."
         }
         $syncProcess.WaitForExit()
         $syncProcess.Refresh()

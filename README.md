@@ -116,7 +116,7 @@ ssh lab-bio@10.200.1.180 docker logs -f $id
 ./scripts/train.sh --resume runs/<run>/last.pt
 ```
 
-## TensorBoard через безопасный SSH-туннель
+## TensorBoard на исследовательском сервере
 
 На сервере:
 
@@ -124,13 +124,10 @@ ssh lab-bio@10.200.1.180 docker logs -f $id
 ./scripts/tensorboard.sh
 ```
 
-На локальном компьютере:
-
-```bash
-ssh -N -L 6006:localhost:6006 user@server
-```
-
-Откройте `http://localhost:6006`. Порт TensorBoard не требуется публиковать наружу.
+Для текущего Windows-сервера интерфейс опубликован в лабораторной сети напрямую:
+`http://10.200.1.180:6006/`. Контейнер использует restart policy `unless-stopped`.
+TensorBoard не имеет встроенной аутентификации, поэтому этот порт нельзя открывать
+в публичный интернет.
 
 ## Автоматическая выгрузка результатов с сервера
 
@@ -175,20 +172,23 @@ ssh lab-bio@10.200.1.180 powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 Состояние хранится в `pipeline-status.json`, подробный вывод — в
-`pipeline-stdout.log` и `pipeline-stderr.log`. TensorBoard слушает только localhost
-сервера; для безопасного просмотра используйте SSH-туннель:
+`pipeline-stdout.log` и `pipeline-stderr.log`. TensorBoard доступен в лабораторной
+сети без туннеля:
 
 ```powershell
-ssh -N -L 6006:127.0.0.1:6006 lab-bio@10.200.1.180
+http://10.200.1.180:6006/
 ```
 
-После этого интерфейс доступен на `http://localhost:6006`.
+Скрипт `install-server-autostart.ps1` устанавливает серверный watchdog, который
+после входа в Windows и далее каждые пять минут восстанавливает Docker, TensorBoard
+и незавершённую очередь экспериментов.
 
 ### Автоматическое восстановление подключения
 
-Локальная задача `ISIC Research Connectivity` запускается при входе в Windows и
-каждые 2 минуты. Она восстанавливает SSH-туннель TensorBoard с keepalive и выгружает
-результаты минимум раз в 10 минут; после пропажи сети повтор происходит автоматически.
+Локальный watchdog запускается через `HKCU Run` после входа в Windows, проверяет
+подключение каждые 2 минуты и выгружает результаты минимум раз в 10 минут. Если сеть
+появляется позднее, синхронизация возобновляется автоматически. SSH-туннель больше
+не нужен.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
@@ -197,7 +197,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 Текущее состояние записывается в `server-results/connectivity-state.json`, события —
 в `server-results/connectivity-watchdog.log`. Повторная установка безопасна и заменяет
-предыдущую задачу синхронизации.
+предыдущую задачу синхронизации и старый tunnel-процесс.
 
 Автоматически копируются компактные результаты экспериментов: config, environment,
 metrics, status и GPU telemetry. Checkpoints остаются на сервере, чтобы десятки

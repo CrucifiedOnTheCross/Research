@@ -3,6 +3,7 @@ param(
     [string]$Server = "lab-bio@10.200.1.180",
     [string]$RemoteProject = "C:/Users/lab-bio/Research",
     [string]$LocalRuns = "",
+    [string]$TensorBoardUrl = "http://10.200.1.180:6006/",
     [int]$CheckIntervalMinutes = 2,
     [int]$SyncIntervalMinutes = 10,
     [string]$TaskName = "ISIC Research Connectivity"
@@ -17,19 +18,12 @@ $arguments = @(
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
     "-File", "`"$watchdog`"", "-Server", "`"$Server`"",
     "-RemoteProject", "`"$RemoteProject`"", "-LocalRuns", "`"$LocalRuns`"",
-    "-SyncIntervalMinutes", $SyncIntervalMinutes
+    "-SyncIntervalMinutes", $SyncIntervalMinutes,
+    "-CheckIntervalSeconds", ($CheckIntervalMinutes * 60),
+    "-TensorBoardUrl", "`"$TensorBoardUrl`""
 ) -join " "
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments -WorkingDirectory $PSScriptRoot
-$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-$repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-    -RepetitionInterval (New-TimeSpan -Minutes $CheckIntervalMinutes)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
-    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([timespan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
-    -LogonType Interactive -RunLevel Limited
-
-# Replace a manually started tunnel so the managed process gets keepalive options.
+# Direct TensorBoard access replaces the old localhost SSH tunnel.
 foreach ($connection in @(Get-NetTCPConnection -LocalPort 6006 -State Listen -ErrorAction SilentlyContinue)) {
     $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($connection.OwningProcess)" -ErrorAction SilentlyContinue
     if ($process.Name -eq "ssh.exe" -and $process.CommandLine -like "*$Server*" -and
@@ -40,9 +34,27 @@ foreach ($connection in @(Get-NetTCPConnection -LocalPort 6006 -State Listen -Er
 
 Stop-ScheduledTask -TaskName "ISIC Research Result Sync" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "ISIC Research Result Sync" -Confirm:$false -ErrorAction SilentlyContinue
-Register-ScheduledTask -TaskName $TaskName -Action $action `
-    -Trigger @($logonTrigger, $repeatTrigger) -Settings $settings -Principal $principal `
-    -Description "Maintain TensorBoard SSH tunnel and synchronize ISIC results" -Force | Out-Null
-Start-ScheduledTask -TaskName $TaskName
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+# HKCU Run requires no administrator rights and reliably starts after the user
+# signs in following a reboot. The watchdog itself remains alive, checks for
+# connectivity periodically, and therefore handles networks appearing later.
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$runName = "ISICResearchConnectivity"
+$runCommand = "powershell.exe $arguments"
+Set-ItemProperty -Path $runKey -Name $runName -Value $runCommand -Type String
+
+foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+        Where-Object { $_.CommandLine -like "*connectivity-watchdog.ps1*" -and
+            $_.CommandLine -notlike "*install-connectivity-watchdog.ps1*" })) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+}
+Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
+    -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
 Start-Sleep -Seconds 5
-Get-ScheduledTask -TaskName $TaskName | Select-Object TaskName, State
+[pscustomobject]@{
+    AutoStart = "HKCU Run"
+    RegistryName = $runName
+    WatchdogStarted = $true
+}
